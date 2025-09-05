@@ -1,10 +1,17 @@
 import os
 from flask import Flask, request, jsonify, render_template, send_file, session
-from image_generator import generate_multiple_images
+from image_generator import generate_multiple_images, process_uploaded_image
 import json
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.secret_key = 'nano-banana-secret-key-2024'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 GAME_STAGES = {
     1: {
@@ -99,18 +106,41 @@ def get_stages():
 
 @app.route('/generate', methods=['POST'])
 def generate_images():
-    data = request.get_json()
+    # Handle both JSON and form data (for file uploads)
+    if request.is_json:
+        data = request.get_json()
+        input_image_base64 = None
+    else:
+        # Form data with potential file upload
+        data = request.form.to_dict()
+        uploaded_file = request.files.get('image')
+        
+        if uploaded_file and allowed_file(uploaded_file.filename):
+            input_image_base64 = process_uploaded_image(uploaded_file)
+            if not input_image_base64:
+                return jsonify({"error": "Failed to process uploaded image"}), 400
+        else:
+            input_image_base64 = None
+    
     if not data or 'prompt' not in data:
         return jsonify({"error": "No prompt provided"}), 400
     
     # Enhance prompt with stage theme if specified
     stage_id = data.get('stage_id')
     enhanced_prompt = data['prompt']
-    if stage_id and stage_id in GAME_STAGES:
-        stage_theme = GAME_STAGES[stage_id]['theme']
-        enhanced_prompt = f"{data['prompt']} in the style of {stage_theme}"
+    if stage_id and int(stage_id) in GAME_STAGES:
+        stage_theme = GAME_STAGES[int(stage_id)]['theme']
+        if input_image_base64:
+            enhanced_prompt = f"{data['prompt']} in the style of {stage_theme}"
+        else:
+            enhanced_prompt = f"{data['prompt']} in the style of {stage_theme}"
     
-    results = generate_multiple_images(enhanced_prompt, data.get('num_images', 4))
+    # Generate images (either from text or from uploaded image)
+    results = generate_multiple_images(
+        enhanced_prompt, 
+        int(data.get('num_images', 4)), 
+        input_image_base64
+    )
     
     # Update user progress on successful generation
     successful_images = len([r for r in results if r['success']])
@@ -130,7 +160,8 @@ def generate_images():
         "failed_count": len([r for r in results if not r['success']]),
         "stage_unlocked": stage_unlocked,
         "current_stage": current_stage,
-        "images_generated": images_generated
+        "images_generated": images_generated,
+        "mode": "edit" if input_image_base64 else "generate"
     })
 
 @app.route('/outputs/<filename>')

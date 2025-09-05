@@ -14,9 +14,34 @@
         </div>
         
         <div class="content">
+            <div class="mode-selector">
+                <button id="generateModeBtn" class="mode-btn active" onclick="switchMode('generate')">
+                    🎨 Generate New
+                </button>
+                <button id="editModeBtn" class="mode-btn" onclick="switchMode('edit')">
+                    ✏️ Edit Image
+                </button>
+            </div>
+            
             <div class="input-section">
+                <!-- Image Upload Section (initially hidden) -->
+                <div id="uploadSection" class="upload-section" style="display: none;">
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-content">
+                            <div class="upload-icon">📁</div>
+                            <p>Drag & drop an image here or click to browse</p>
+                            <small>Supported formats: PNG, JPG, GIF, WebP (max 16MB)</small>
+                            <input type="file" id="imageUpload" accept="image/*" style="display: none;">
+                        </div>
+                    </div>
+                    <div id="imagePreview" class="image-preview" style="display: none;">
+                        <img id="previewImg" src="" alt="Preview">
+                        <button class="remove-btn" onclick="clearUpload()">✕ Remove</button>
+                    </div>
+                </div>
+                
                 <div class="input-group">
-                    <label for="prompt">Image Description:</label>
+                    <label for="prompt" id="promptLabel">Image Description:</label>
                     <textarea id="prompt" placeholder="Describe the image you want to generate... e.g., 'a beautiful sunset over mountains with vibrant colors'"></textarea>
                 </div>
                 
@@ -27,7 +52,7 @@
                     </div>
                     
                     <button class="generate-btn" onclick="generateImages()">
-                        <span class="btn-text">Generate Images</span>
+                        <span class="btn-text" id="generateBtnText">Generate Images</span>
                     </button>
                 </div>
             </div>
@@ -48,6 +73,90 @@
     </div>
 
     <script>
+        let currentMode = 'generate';
+        let uploadedImage = null;
+        
+        function switchMode(mode) {
+            currentMode = mode;
+            
+            // Update button states
+            document.getElementById('generateModeBtn').classList.toggle('active', mode === 'generate');
+            document.getElementById('editModeBtn').classList.toggle('active', mode === 'edit');
+            
+            // Show/hide upload section
+            document.getElementById('uploadSection').style.display = mode === 'edit' ? 'block' : 'none';
+            
+            // Update UI text
+            const promptLabel = document.getElementById('promptLabel');
+            const promptTextarea = document.getElementById('prompt');
+            const generateBtnText = document.getElementById('generateBtnText');
+            
+            if (mode === 'edit') {
+                promptLabel.textContent = 'Editing Instructions:';
+                promptTextarea.placeholder = 'Describe how you want to edit this image... e.g., "make it darker", "add a sunset background", "change to watercolor style"';
+                generateBtnText.textContent = 'Edit Images';
+            } else {
+                promptLabel.textContent = 'Image Description:';
+                promptTextarea.placeholder = 'Describe the image you want to generate... e.g., "a beautiful sunset over mountains with vibrant colors"';
+                generateBtnText.textContent = 'Generate Images';
+            }
+        }
+        
+        // Image upload handling
+        document.getElementById('uploadArea').addEventListener('click', () => {
+            document.getElementById('imageUpload').click();
+        });
+        
+        document.getElementById('imageUpload').addEventListener('change', handleImageUpload);
+        
+        // Drag and drop handling
+        const uploadArea = document.getElementById('uploadArea');
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleImageUpload({target: {files: files}});
+            }
+        });
+        
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            if (!file.type.startsWith('image/')) {
+                alert('Please select an image file');
+                return;
+            }
+            
+            uploadedImage = file;
+            
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('previewImg').src = e.target.result;
+                document.getElementById('uploadArea').style.display = 'none';
+                document.getElementById('imagePreview').style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function clearUpload() {
+            uploadedImage = null;
+            document.getElementById('imageUpload').value = '';
+            document.getElementById('uploadArea').style.display = 'block';
+            document.getElementById('imagePreview').style.display = 'none';
+        }
+        
         async function generateImages() {
             const prompt = document.getElementById('prompt').value.trim();
             const numImages = parseInt(document.getElementById('numImages').value);
@@ -57,22 +166,47 @@
                 return;
             }
             
+            if (currentMode === 'edit' && !uploadedImage) {
+                alert('Please upload an image to edit');
+                return;
+            }
+            
             // Show loading state
             document.querySelector('.generate-btn').disabled = true;
             document.getElementById('loading').style.display = 'block';
             document.getElementById('results').style.display = 'none';
             
+            // Update loading text based on mode
+            const loadingText = document.querySelector('#loading h3');
+            loadingText.textContent = currentMode === 'edit' ? 'Editing your image...' : 'Generating your images...';
+            
             try {
-                const response = await fetch('/generate', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        prompt: prompt,
-                        num_images: numImages
-                    })
-                });
+                let response;
+                
+                if (currentMode === 'edit' && uploadedImage) {
+                    // Form data for file upload
+                    const formData = new FormData();
+                    formData.append('prompt', prompt);
+                    formData.append('num_images', numImages);
+                    formData.append('image', uploadedImage);
+                    
+                    response = await fetch('/generate', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    // JSON for text-to-image
+                    response = await fetch('/generate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            prompt: prompt,
+                            num_images: numImages
+                        })
+                    });
+                }
                 
                 const data = await response.json();
                 
@@ -90,7 +224,7 @@
                 
                 const errorMessage = document.createElement('div');
                 errorMessage.className = 'status-message error';
-                errorMessage.textContent = `Error generating images: ${error.message}`;
+                errorMessage.textContent = `Error ${currentMode === 'edit' ? 'editing' : 'generating'} images: ${error.message}`;
                 resultsSection.insertBefore(errorMessage, imageGrid);
                 document.getElementById('results').style.display = 'block';
             } finally {
